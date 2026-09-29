@@ -95,42 +95,45 @@ export async function syncNasaFirmsOnServer(customMapKey?: string): Promise<{
     process.env.NASA_FIRMS_MAP_KEY ||
     process.env.VITE_NASA_FIRMS_MAP_KEY ||
     NASA_FIRMS_MAP_KEY;
-  const sensors = ['VIIRS_NOAA20_NRT', 'VIIRS_SNPP_NRT'];
+  const sensors = ['VIIRS_NOAA21_NRT', 'VIIRS_NOAA20_NRT', 'VIIRS_SNPP_NRT', 'MODIS_NRT'];
   const allParsedHotspots: ReturnType<typeof firmsService.parseFirmsCsv> = [];
   const activeSensors: string[] = [];
 
-  for (const sensor of sensors) {
-    const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${mapKey}/${sensor}/68,8,90,33/5`;
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8500);
-      const response = await fetch(url, {
-        headers: { Accept: 'text/csv, text/plain' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+  await Promise.all(
+    sensors.map(async (sensor) => {
+      const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${mapKey}/${sensor}/68,8,90,33/5`;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 9000);
+        const response = await fetch(url, {
+          headers: { Accept: 'text/csv, text/plain' },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
 
-      if (!response.ok) continue;
-      const csvText = await response.text();
-      if (
-        !csvText ||
-        csvText.includes('Invalid MAP KEY') ||
-        csvText.includes('Invalid API call') ||
-        csvText.includes('Error') ||
-        csvText.trim().split('\n').length < 2
-      ) {
-        continue;
-      }
+        if (!response.ok) return;
+        const csvText = await response.text();
+        if (
+          !csvText ||
+          csvText.includes('Invalid MAP KEY') ||
+          csvText.includes('Invalid API call') ||
+          csvText.includes('Invalid day range') ||
+          csvText.includes('Error') ||
+          csvText.trim().split('\n').length < 2
+        ) {
+          return;
+        }
 
-      const parsed = firmsService.parseFirmsCsv(csvText);
-      if (parsed.length > 0) {
-        allParsedHotspots.push(...parsed);
-        activeSensors.push(sensor);
+        const parsed = firmsService.parseFirmsCsv(csvText, sensor);
+        if (parsed.length > 0) {
+          allParsedHotspots.push(...parsed);
+          activeSensors.push(sensor);
+        }
+      } catch {
+        // Ignore individual sensor timeout
       }
-    } catch {
-      // Continue to next sensor
-    }
-  }
+    })
+  );
 
   if (allParsedHotspots.length > 0) {
     const baseFacilities = [...INDUSTRIAL_FACILITIES_REGISTRY];

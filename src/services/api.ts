@@ -324,17 +324,19 @@ export const apiService = {
 
     try {
       const mapKey = firmsService.getFullMapKey();
-      const sensors = ['VIIRS_NOAA20_NRT', 'VIIRS_SNPP_NRT'];
+      const sensors = ['VIIRS_NOAA21_NRT', 'VIIRS_NOAA20_NRT', 'VIIRS_SNPP_NRT', 'MODIS_NRT'];
       const allRows: ReturnType<typeof firmsService.parseFirmsCsv> = [];
 
-      for (const sensor of sensors) {
-        const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${mapKey}/${sensor}/68,8,90,33/5`;
-        const r = await fetch(url);
-        if (r.ok) {
-          const csvText = await r.text();
-          allRows.push(...firmsService.parseFirmsCsv(csvText));
-        }
-      }
+      await Promise.all(
+        sensors.map(async (sensor) => {
+          const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${mapKey}/${sensor}/68,8,90,33/5`;
+          const r = await fetch(url);
+          if (r.ok) {
+            const csvText = await r.text();
+            allRows.push(...firmsService.parseFirmsCsv(csvText, sensor));
+          }
+        })
+      );
 
       if (allRows.length > 0) {
         const correlated = firmsService.correlateWithFacilities(allRows, localFacilities, 18);

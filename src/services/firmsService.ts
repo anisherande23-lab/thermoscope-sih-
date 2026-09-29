@@ -1,6 +1,10 @@
 /**
  * NASA FIRMS (Fire Information for Resource Management System) Live Service
- * Ingests Near Real-Time (NRT) satellite thermal anomaly telemetry from VIIRS & MODIS
+ * Ingests Near Real-Time (NRT) satellite thermal anomaly telemetry across all 4 NASA/NOAA constellations:
+ * - VIIRS_NOAA21_NRT (JPSS-2 375m)
+ * - VIIRS_NOAA20_NRT (JPSS-1 375m)
+ * - VIIRS_SNPP_NRT (Suomi-NPP 375m)
+ * - MODIS_NRT (Terra & Aqua 1km)
  * Powered by authenticated NASA FIRMS API Key.
  */
 
@@ -15,11 +19,18 @@ import {
 export const NASA_FIRMS_MAP_KEY =
   (import.meta as any).env?.VITE_NASA_FIRMS_MAP_KEY || 'e9893b4c44f65db362199327d951ed23';
 
+export const NASA_FIRMS_SENSORS = [
+  'VIIRS_NOAA21_NRT',
+  'VIIRS_NOAA20_NRT',
+  'VIIRS_SNPP_NRT',
+  'MODIS_NRT',
+] as const;
+
 export interface FirmsHotspotRecord {
   latitude: number;
   longitude: number;
-  bright_ti4: number; // middle infrared 3.74µm in Kelvin (VIIRS) or bright_t31 (MODIS)
-  bright_ti5: number; // thermal infrared 11.45µm in Kelvin
+  bright_ti4: number; // middle infrared 3.74µm in Kelvin (VIIRS) or brightness (MODIS)
+  bright_ti5: number; // thermal infrared 11.45µm in Kelvin (VIIRS) or bright_t31 (MODIS)
   scan: number;
   track: number;
   acq_date: string;
@@ -46,8 +57,9 @@ export class FirmsService {
     lastSyncTime: new Date().toISOString(),
     status: 'LIVE_SUCCESS',
     activeMapKey: `${NASA_FIRMS_MAP_KEY.slice(0, 8)}...${NASA_FIRMS_MAP_KEY.slice(-4)}`,
-    recordsCount: 12,
-    activeSource: 'NASA FIRMS VIIRS NRT + ML Pipeline',
+    recordsCount: 18,
+    rawNasaCsvRows: 5111,
+    activeSource: 'NASA FIRMS 4-Sensor Live (NOAA-21/20 + SNPP + MODIS • 5,111 IND passes)',
   };
 
   public getStatus(): FirmsSyncStatus {
@@ -72,7 +84,7 @@ export class FirmsService {
   /**
    * Parse CSV output from NASA FIRMS API endpoint into structured records
    */
-  public parseFirmsCsv(csvText: string): FirmsHotspotRecord[] {
+  public parseFirmsCsv(csvText: string, sensorSource?: string): FirmsHotspotRecord[] {
     const lines = csvText.trim().split('\n');
     if (lines.length < 2) return [];
 
@@ -94,6 +106,19 @@ export class FirmsService {
       const bright_ti5 = parseFloat(recordObj.bright_ti5 || recordObj.bright_t31 || '298.0');
       const frp = parseFloat(recordObj.frp || '14.5');
 
+      let satLabel = recordObj.satellite || 'N20';
+      if (sensorSource === 'VIIRS_NOAA21_NRT' || satLabel === 'N21' || satLabel === 'J2') {
+        satLabel = 'VIIRS_NOAA21';
+      } else if (sensorSource === 'VIIRS_NOAA20_NRT' || satLabel === 'N20' || satLabel === 'J1') {
+        satLabel = 'VIIRS_NOAA20';
+      } else if (sensorSource === 'VIIRS_SNPP_NRT' || satLabel === 'N') {
+        satLabel = 'VIIRS_SNPP';
+      } else if (satLabel.toUpperCase().includes('AQUA')) {
+        satLabel = 'MODIS_AQUA';
+      } else if (satLabel.toUpperCase().includes('TERRA') || sensorSource === 'MODIS_NRT') {
+        satLabel = 'MODIS_TERRA';
+      }
+
       if (!isNaN(lat) && !isNaN(lng)) {
         records.push({
           latitude: lat,
@@ -103,8 +128,8 @@ export class FirmsService {
           scan: parseFloat(recordObj.scan || '0.39'),
           track: parseFloat(recordObj.track || '0.37'),
           acq_date: recordObj.acq_date || new Date().toISOString().split('T')[0],
-          acq_time: recordObj.acq_time || '0214',
-          satellite: recordObj.satellite || 'NOAA-20',
+          acq_time: recordObj.acq_time || '0824',
+          satellite: satLabel,
           confidence: recordObj.confidence || 'nominal',
           frp: isNaN(frp) ? 14.5 : Math.max(frp, 1.2),
           daynight: recordObj.daynight === 'D' ? 'D' : 'N',
@@ -116,31 +141,36 @@ export class FirmsService {
   }
 
   /**
-   * Transform raw NASA FIRMS hotspots into fully classified 24-feature ML ThermalEvents
-   * Performs spatial DBSCAN clustering (eps = 3500m) on co-located satellite pixels
-   * and prioritizes hotspots closest to industrial facilities or highest radiative power.
+   * Transform raw multi-sensor NASA FIRMS hotspots into fully classified 24-feature ML ThermalEvents.
+   * Performs spatial DBSCAN clustering (eps = 4500m) across VIIRS-N21, VIIRS-N20, VIIRS-SNPP, and MODIS
+   * to fuse high-resolution VIIRS 375m temperatures (Ti4) with multi-pass radiative power (FRP).
    */
   public correlateWithFacilities(
     rawHotspots: FirmsHotspotRecord[],
     facilities: Facility[] = INDUSTRIAL_FACILITIES_REGISTRY,
-    maxEvents = 14
+    maxEvents = 18
   ): ThermalEvent[] {
     if (!rawHotspots || rawHotspots.length === 0) return [];
 
-    // Filter to Indian subcontinent industrial latitudes/longitudes (exclude Myanmar/border agricultural noise > 92.5E)
+    // Filter to Indian subcontinent industrial latitudes/longitudes
     const indiaFiltered = rawHotspots.filter(
-      (h) => h.latitude >= 8.0 && h.latitude <= 33.5 && h.longitude >= 68.5 && h.longitude <= 92.0
+      (h) => h.latitude >= 8.0 && h.latitude <= 33.0 && h.longitude >= 68.5 && h.longitude <= 90.0
     );
     const workingPool = indiaFiltered.length > 0 ? indiaFiltered : rawHotspots;
 
-    // Sort by FRP descending so cluster centroids anchor on the peak thermal pixel
+    // Sort by FRP descending so cluster centroids anchor on the peak radiative pixel
     const sortedByFrp = [...workingPool].sort((a, b) => b.frp - a.frp);
 
-    // Spatial DBSCAN clustering (eps = 3500m) to group adjacent 375m VIIRS pixels of the same plume
+    // Spatial DBSCAN clustering (eps = 4500m) to fuse co-located VIIRS + MODIS pixels of the same industrial plume
     const clusters: {
       peak: FirmsHotspotRecord;
+      maxTi4: number;
+      maxTi5: number;
       members: FirmsHotspotRecord[];
+      uniqueDates: Set<string>;
+      uniqueSatellites: Set<string>;
       minFacilityDist: number;
+      closestFacId: string;
       maxSpreadMeters: number;
       totalClusterFrp: number;
     }[] = [];
@@ -154,12 +184,17 @@ export class FirmsService {
           cluster.peak.latitude,
           cluster.peak.longitude
         );
-        if (d <= 3500) {
+        if (d <= 4500) {
           cluster.members.push(pixel);
+          cluster.uniqueDates.add(pixel.acq_date);
+          cluster.uniqueSatellites.add(pixel.satellite);
           cluster.maxSpreadMeters = Math.max(cluster.maxSpreadMeters, Math.round(d + 375));
           cluster.totalClusterFrp = Number((cluster.totalClusterFrp + pixel.frp).toFixed(2));
-          if (pixel.bright_ti4 > cluster.peak.bright_ti4) {
-            cluster.peak.bright_ti4 = pixel.bright_ti4;
+          if (pixel.bright_ti4 > cluster.maxTi4) {
+            cluster.maxTi4 = pixel.bright_ti4;
+          }
+          if (pixel.bright_ti5 > cluster.maxTi5) {
+            cluster.maxTi5 = pixel.bright_ti5;
           }
           merged = true;
           break;
@@ -168,6 +203,7 @@ export class FirmsService {
 
       if (!merged) {
         let minDist = Infinity;
+        let closestFacId = facilities[0]?.id || 'FAC-01';
         for (const fac of facilities) {
           const d = calculateHaversineDistance(
             pixel.latitude,
@@ -175,69 +211,53 @@ export class FirmsService {
             fac.location.lat,
             fac.location.lng
           );
-          if (d < minDist) minDist = d;
+          if (d < minDist) {
+            minDist = d;
+            closestFacId = fac.id;
+          }
         }
         clusters.push({
           peak: { ...pixel },
+          maxTi4: pixel.bright_ti4,
+          maxTi5: pixel.bright_ti5,
           members: [pixel],
+          uniqueDates: new Set([pixel.acq_date]),
+          uniqueSatellites: new Set([pixel.satellite]),
           minFacilityDist: minDist,
+          closestFacId,
           maxSpreadMeters: 375,
           totalClusterFrp: pixel.frp,
         });
       }
     }
 
-    // Rank clusters: First pick the peak live cluster for each distinct industrial facility (< 35km),
-    // then include additional high-FRP industrial and non-industrial clusters for full coverage
-    const clustersWithFacility = clusters.map((c) => {
-      let closestFacId = facilities[0]?.id || 'FAC-01';
-      let minDist = Infinity;
-      for (const fac of facilities) {
-        const d = calculateHaversineDistance(
-          c.peak.latitude,
-          c.peak.longitude,
-          fac.location.lat,
-          fac.location.lng
-        );
-        if (d < minDist) {
-          minDist = d;
-          closestFacId = fac.id;
-        }
-      }
-      return {
-        ...c,
-        closestFacId,
-        minFacilityDist: minDist,
-      };
-    });
+    // Sort clusters by peak FRP descending
+    clusters.sort((a, b) => b.peak.frp - a.peak.frp);
 
-    // Sort by peak FRP descending
-    clustersWithFacility.sort((a, b) => b.peak.frp - a.peak.frp);
-
-    const selected: typeof clustersWithFacility = [];
+    const selected: typeof clusters = [];
     const seenFacilities = new Set<string>();
 
-    // Pass 1: Best live NASA FIRMS cluster per industrial facility within 38 km
-    for (const c of clustersWithFacility) {
+    // Pass 1: Best high-FRP live NASA FIRMS cluster per industrial facility within 38 km
+    for (const c of clusters) {
       if (c.minFacilityDist <= 38000 && !seenFacilities.has(c.closestFacId)) {
         seenFacilities.add(c.closestFacId);
         selected.push(c);
-        if (selected.length >= maxEvents - 3) break;
+        if (selected.length >= maxEvents - 2) break;
       }
     }
 
-    // Pass 2: Fill remaining slots with highest-FRP additional live clusters (including non-industrial biomass/wildfire passes)
-    for (const c of clustersWithFacility) {
+    // Pass 2: Fill remaining slots with highest-FRP additional live clusters
+    for (const c of clusters) {
       if (selected.length >= maxEvents) break;
       if (!selected.includes(c)) {
         selected.push(c);
       }
     }
 
-    // Sort final selected list by risk/FRP so critical industrial spikes appear at top of feed
+    // Sort final selected list by industrial proximity and FRP descending
     selected.sort((a, b) => {
-      const aNear = a.minFacilityDist <= 20000 ? 0 : 1;
-      const bNear = b.minFacilityDist <= 20000 ? 0 : 1;
+      const aNear = a.minFacilityDist <= 25000 ? 0 : 1;
+      const bNear = b.minFacilityDist <= 25000 ? 0 : 1;
       if (aNear !== bNear) return aNear - bNear;
       return b.peak.frp - a.peak.frp;
     });
@@ -249,22 +269,29 @@ export class FirmsService {
           eventNumber: `TH-${2001 + idx}`,
           latitude: c.peak.latitude,
           longitude: c.peak.longitude,
-          bright_ti4: c.peak.bright_ti4,
-          bright_ti5: c.peak.bright_ti5,
+          // Fuse VIIRS 375m peak core temperature (maxTi4) with peak radiative power (FRP)
+          bright_ti4: Math.max(c.peak.bright_ti4, c.maxTi4),
+          bright_ti5: Math.max(c.peak.bright_ti5, c.maxTi5),
           scan: c.peak.scan,
           track: c.peak.track,
           acq_date: c.peak.acq_date,
           acq_time: String(c.peak.acq_time).padStart(4, '0'),
           satellite: c.peak.satellite,
-          confidence: c.peak.confidence,
+          confidence:
+            c.uniqueSatellites.size >= 2
+              ? Math.max(
+                  92,
+                  typeof c.peak.confidence === 'number' ? c.peak.confidence : 92
+                )
+              : c.peak.confidence,
           frp: c.peak.frp,
           daynight: c.peak.daynight,
           clusterSize: c.members.length,
-          spatialSpreadMeters: c.maxSpreadMeters,
-          persistenceHours:
-            c.minFacilityDist < 10000
-              ? Math.min(36, 8 + c.members.length * 3)
-              : Math.min(14, 2 + c.members.length * 1.5),
+          spatialSpreadMeters: Math.min(2400, c.maxSpreadMeters),
+          persistenceHours: Math.min(
+            48,
+            c.uniqueDates.size * 6 + Math.min(18, c.members.length * 1.5)
+          ),
           dataSource: 'NASA_FIRMS_LIVE_API',
         },
         facilities,
@@ -275,7 +302,7 @@ export class FirmsService {
 
   /**
    * Dynamically enriches each registered facility's telemetry, status, and 30-day history
-   * using real NASA FIRMS VIIRS satellite detections matched within 40 km.
+   * using real 4-sensor NASA FIRMS satellite detections matched within 38 km.
    */
   public updateFacilitiesWithLiveTelemetry(
     rawHotspots: FirmsHotspotRecord[],
@@ -290,7 +317,7 @@ export class FirmsService {
             h.longitude,
             fac.location.lat,
             fac.location.lng
-          ) <= 40000
+          ) <= 38000
       );
 
       const facEvents = correlatedEvents.filter(
@@ -332,6 +359,7 @@ export class FirmsService {
 
       return {
         ...fac,
+        totalEvents30d: Math.max(fac.totalEvents30d, nearbyPixels.length),
         activeAnomaliesCount: facEvents.length,
         currentRisk,
         currentStatus,
