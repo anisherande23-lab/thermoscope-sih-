@@ -1,0 +1,6 @@
+{
+  "name": "THERMOSCOPE — Industrial Thermal Intelligence",
+  "description": "AI-powered geospatial industrial thermal anomaly intelligence and disaster management platform for Smart India Hackathon 2026.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
