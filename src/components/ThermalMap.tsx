@@ -59,6 +59,7 @@ export const ThermalMap: React.FC<ThermalMapProps> = ({
   );
 
   const [showLayerMenu, setShowLayerMenu] = useState(false);
+  const [basemapMode, setBasemapMode] = useState<'dark' | 'satellite'>('dark');
   const [hoveredEvent, setHoveredEvent] = useState<ThermalEvent | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
   const [cursorCoords, setCursorCoords] = useState<{ lat: number; lng: number; zoom: number }>({
@@ -96,24 +97,69 @@ export const ThermalMap: React.FC<ThermalMapProps> = ({
     const mapStyle: maplibregl.StyleSpecification = {
       version: 8,
       sources: {
-        'carto-dark': {
+        'esri-dark-base': {
           type: 'raster',
           tiles: [
-            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          attribution: '&copy; OpenStreetMap &copy; CARTO',
+        },
+        'esri-dark-labels': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+        },
+        'esri-satellite': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+        },
+        'esri-satellite-labels': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
         },
       },
       layers: [
         {
-          id: 'carto-dark-layer',
+          id: 'esri-dark-base-layer',
           type: 'raster',
-          source: 'carto-dark',
+          source: 'esri-dark-base',
           minzoom: 0,
-          maxzoom: 20,
+          maxzoom: 19,
+        },
+        {
+          id: 'esri-dark-labels-layer',
+          type: 'raster',
+          source: 'esri-dark-labels',
+          minzoom: 0,
+          maxzoom: 19,
+        },
+        {
+          id: 'esri-satellite-layer',
+          type: 'raster',
+          source: 'esri-satellite',
+          minzoom: 0,
+          maxzoom: 19,
+          layout: {
+            visibility: 'none',
+          },
+        },
+        {
+          id: 'esri-satellite-labels-layer',
+          type: 'raster',
+          source: 'esri-satellite-labels',
+          minzoom: 0,
+          maxzoom: 19,
+          layout: {
+            visibility: 'none',
+          },
         },
       ],
     };
@@ -298,6 +344,35 @@ export const ThermalMap: React.FC<ThermalMapProps> = ({
       });
     }
 
+    if (map.getLayer('esri-dark-base-layer')) {
+      map.setLayoutProperty(
+        'esri-dark-base-layer',
+        'visibility',
+        basemapMode === 'dark' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('esri-dark-labels-layer')) {
+      map.setLayoutProperty(
+        'esri-dark-labels-layer',
+        'visibility',
+        basemapMode === 'dark' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('esri-satellite-layer')) {
+      map.setLayoutProperty(
+        'esri-satellite-layer',
+        'visibility',
+        basemapMode === 'satellite' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('esri-satellite-labels-layer')) {
+      map.setLayoutProperty(
+        'esri-satellite-labels-layer',
+        'visibility',
+        basemapMode === 'satellite' ? 'visible' : 'none'
+      );
+    }
+
     if (map.getLayer('risk-zones-layer')) {
       map.setLayoutProperty(
         'risk-zones-layer',
@@ -423,6 +498,7 @@ export const ThermalMap: React.FC<ThermalMapProps> = ({
     layers.heatmap,
     layers.satelliteFootprints,
     layers.historicalEvents,
+    basemapMode,
   ]);
 
   // 3. Render Thermal Anomaly DOM Markers
@@ -640,6 +716,33 @@ export const ThermalMap: React.FC<ThermalMapProps> = ({
           {showLayerMenu && (
             <div className="absolute right-0 top-11 w-64 rounded-xl border border-slate-700 bg-slate-950/95 p-3.5 shadow-2xl backdrop-blur-xl space-y-2 text-xs text-slate-300 font-mono animate-in fade-in zoom-in-95">
               <div className="text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800 pb-1.5">
+                Basemap Tile Engine
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 pb-1.5 border-b border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setBasemapMode('dark')}
+                  className={`rounded-md py-1.5 px-2 text-[11px] font-semibold transition ${
+                    basemapMode === 'dark'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50'
+                      : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  Dark GIS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBasemapMode('satellite')}
+                  className={`rounded-md py-1.5 px-2 text-[11px] font-semibold transition ${
+                    basemapMode === 'satellite'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50'
+                      : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  Satellite
+                </button>
+              </div>
+              <div className="text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800 pb-1.5 pt-0.5">
                 Active Spatial Layers
               </div>
 

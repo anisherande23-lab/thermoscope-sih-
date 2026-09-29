@@ -103,7 +103,7 @@ export const ModelInsightsPage: React.FC<ModelInsightsPageProps> = ({
       title: 'NASA FIRMS Ingestion',
       subtitle: 'Raw VIIRS NOAA-20/21 (375m) & MODIS NRT Hotspots',
       description:
-        'Ingests near real-time orbital swath CSV telemetry via authenticated NASA FIRMS API (MAP KEY: e9893b...ed23), extracting 3.74µm (Ti4) & 11.45µm (Ti5) brightness temperatures and Fire Radiative Power (MW).',
+        'Ingests near real-time orbital swath CSV telemetry via NASA FIRMS NRT API across VIIRS NOAA-20/21, Suomi-NPP, and Terra/Aqua MODIS, extracting 3.74µm (Ti4) & 11.45µm (Ti5) brightness temperatures and Fire Radiative Power (MW).',
       icon: Database,
     },
     {

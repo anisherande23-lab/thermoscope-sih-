@@ -263,8 +263,8 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
 
           <div className="space-y-1.5 font-mono text-[11px]">
             <div className="flex justify-between">
-              <span className="text-slate-400">NASA FIRMS Key:</span>
-              <span className="text-amber-300 font-bold">e9893b...ed23</span>
+              <span className="text-slate-400">Telemetry Stream:</span>
+              <span className="text-emerald-300 font-bold">4-Sensor Live NRT</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Primary Sensor:</span>
